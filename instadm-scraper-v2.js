@@ -46,6 +46,7 @@
       scanBtn: 'Start Scan',
       rescanBtn: 'Rescan',
       scanningBtn: 'Scanning...',
+      optCurrentPosition: 'Start from current chat position',
       filterTitle: 'Filters',
       filterLabel: 'Show',
       filterAll: 'Everything',
@@ -131,6 +132,7 @@
       scanBtn: 'Taramayı Başlat',
       rescanBtn: 'Yeniden Tara',
       scanningBtn: 'Taranıyor...',
+      optCurrentPosition: 'Sohbetteki mevcut konumdan başla',
       filterTitle: 'Filtreler',
       filterLabel: 'Göster',
       filterAll: 'Her şey',
@@ -216,6 +218,7 @@
       scanBtn: 'Iniciar escaneo',
       rescanBtn: 'Reescanear',
       scanningBtn: 'Escaneando...',
+      optCurrentPosition: 'Empezar desde la posición actual del chat',
       filterTitle: 'Filtros',
       filterLabel: 'Mostrar',
       filterAll: 'Todo',
@@ -312,6 +315,7 @@
     dialogCaptureTimer: null,
     pendingReelAssignments: [],
     scanOptions: {
+      startFromCurrentPosition: false,
       includeImages: true,
       includeAudio: true,
       includeReels: true,
@@ -2598,6 +2602,7 @@
     els.appTitle.textContent = t('appTitle');
     els.appDesc.textContent = t('appDesc');
     els.scanBtn.textContent = state.scanning ? t('scanningBtn') : (state.timeline.length ? t('rescanBtn') : t('scanBtn'));
+    els.optCurrentPositionText.textContent = t('optCurrentPosition');
     els.filterTitle.textContent = t('filterTitle');
     els.filterLabel.textContent = t('filterLabel');
     els.searchLabel.textContent = t('searchLabel');
@@ -2827,6 +2832,7 @@
     setProgress(0);
     setStatus(t('statusPreparing'), 'info');
     els.scanBtn.disabled = true;
+    els.optCurrentPosition.disabled = true;
     els.scanBtn.textContent = t('scanningBtn');
     setMinimized(true);
     updateStatsUi();
@@ -2836,19 +2842,21 @@
       console.log('InstaDM-Scraper v2 by @miabeyefendi');
       console.log(GITHUB_URL);
 
-      setStatus(t('statusTop'), 'info');
+      if (!state.scanOptions.startFromCurrentPosition) {
+        setStatus(t('statusTop'), 'info');
 
-      let previousHeight = -1;
-      let stableCount = 0;
-      while (stableCount < 5) {
-        container.scrollTop = -container.scrollHeight * 2;
-        await sleep(1500);
-        if (container.scrollHeight === previousHeight) stableCount++;
-        else stableCount = 0;
-        previousHeight = container.scrollHeight;
+        let previousHeight = -1;
+        let stableCount = 0;
+        while (stableCount < 5) {
+          container.scrollTop = -container.scrollHeight * 2;
+          await sleep(1500);
+          if (container.scrollHeight === previousHeight) stableCount++;
+          else stableCount = 0;
+          previousHeight = container.scrollHeight;
+        }
+
+        await sleep(3000);
       }
-
-      await sleep(3000);
       setProgress(12);
       setStatus(t('statusScanning'), 'info');
 
@@ -2972,6 +2980,7 @@
       state.scanning = false;
       if (shouldRestoreAfterScan) setMinimized(false);
       els.scanBtn.disabled = false;
+      els.optCurrentPosition.disabled = false;
       els.scanBtn.textContent = state.timeline.length ? t('rescanBtn') : t('scanBtn');
     }
   }
@@ -3508,6 +3517,7 @@
               </div>
               <div class="idm-status-text"></div>
               <div class="idm-progress"><div></div></div>
+              <label class="idm-checkbox"><input class="idm-opt-current-position" type="checkbox"><span class="idm-opt-current-position-text"></span></label>
               <button class="idm-scan-btn"></button>
               <div class="idm-note idm-live-capture"></div>
             </section>
@@ -3577,6 +3587,8 @@
     els.statusText = root.querySelector('.idm-status-text');
     els.progressBar = root.querySelector('.idm-progress > div');
     els.scanBtn = root.querySelector('.idm-scan-btn');
+    els.optCurrentPosition = root.querySelector('.idm-opt-current-position');
+    els.optCurrentPositionText = root.querySelector('.idm-opt-current-position-text');
     els.filterTitle = root.querySelector('.idm-filter-title');
     els.filterLabel = root.querySelector('.idm-filter-label');
     els.filterSelect = root.querySelector('.idm-filter-select');
@@ -3627,6 +3639,9 @@
     });
 
     els.scanBtn.addEventListener('click', scanConversation);
+    els.optCurrentPosition.addEventListener('change', event => {
+      state.scanOptions.startFromCurrentPosition = !!event.target.checked;
+    });
     els.exportJson.addEventListener('click', exportJson);
     els.exportTxt.addEventListener('click', exportTxt);
     els.exportMd.addEventListener('click', exportMd);

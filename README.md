@@ -88,6 +88,12 @@ No build step and no dependencies.
 4. Paste [`instadm-scraper-v2.js`](./instadm-scraper-v2.js) in full and press Enter.
 5. The overlay appears. Start the scan, wait for it to walk back through the thread, then choose an export format.
 
+To save from your current position instead, scroll to the desired place in the chat,
+check **Start from current chat position** above **Start Scan**, and start the scan.
+It captures the messages currently visible and continues toward the newest messages,
+skipping the initial scroll to the beginning. Leave the option unchecked to scan
+the full history.
+
 > **If you get "Conversation container not found", you are not inside a thread.** Opening the inbox is not enough. Click into the actual conversation first, wait for the messages to render, then paste the script.
 
 ---
