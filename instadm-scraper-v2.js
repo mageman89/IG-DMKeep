@@ -80,6 +80,8 @@
       minimizeLabel: 'Minimize',
       restoreLabel: 'Restore',
       attachmentOnly: 'Attachment only',
+      replyToLabel: 'Reply to',
+      originalUnavailable: 'Original message unavailable',
       you: 'You',
       participant: 'Participant',
       likeBadge: 'Liked',
@@ -166,6 +168,8 @@
       minimizeLabel: 'Küçült',
       restoreLabel: 'Geri Aç',
       attachmentOnly: 'Sadece ek',
+      replyToLabel: 'Yanıtlanan mesaj',
+      originalUnavailable: 'Orijinal mesaj mevcut değil',
       you: 'Ben',
       participant: 'Katılımcı',
       likeBadge: 'Beğeni',
@@ -252,6 +256,8 @@
       minimizeLabel: 'Minimizar',
       restoreLabel: 'Restaurar',
       attachmentOnly: 'Solo adjunto',
+      replyToLabel: 'En respuesta a',
+      originalUnavailable: 'Mensaje original no disponible',
       you: 'Yo',
       participant: 'Participante',
       likeBadge: 'Me gusta',
@@ -1014,7 +1020,7 @@
     return rect.left + rect.width / 2 > containerRect.left + containerRect.width * 0.58;
   }
 
-  function extractTimestampNearBubble(bubble) {
+  function extractTimestampNearBubble(bubble, excluded = []) {
     if (!bubble || !bubble.getBoundingClientRect) return '';
 
     const bubbleRect = bubble.getBoundingClientRect();
@@ -1039,6 +1045,7 @@
       seenScopes.add(scope);
 
       scope.querySelectorAll('time').forEach(timeEl => {
+        if (isExcludedReplyNode(timeEl, excluded)) return;
         if (!timeEl || seenTimes.has(timeEl)) return;
         if (timeEl.closest('#' + APP_ID)) return;
 
@@ -1063,7 +1070,7 @@
 
     let fallbackNode = bubble;
     for (let depth = 0; depth < 6 && fallbackNode; depth++) {
-      const timeEl = fallbackNode.querySelector && fallbackNode.querySelector('time');
+      const timeEl = fallbackNode.querySelectorAll && Array.from(fallbackNode.querySelectorAll('time')).find(node => !isExcludedReplyNode(node, excluded));
       const label = getTimeElementLabel(timeEl);
       if (label) return label;
       fallbackNode = fallbackNode.parentElement;
@@ -1098,7 +1105,97 @@
     return likeEmoji;
   }
 
-  function extractBubbleText(bubble) {
+  function isReplyPreviewLabel(value) {
+    return /^(original message|quoted message|původní zpráva|citovaná zpráva|mensaje original|mensaje citado|orijinal mesaj|alıntılanan mesaj)(?:\s|:|$)/iu.test(safeText(value));
+  }
+
+  function isReplyContextLabel(value) {
+    return /^(?:you replied to .+|.+ replied to you|.+ replied to .+|replied to .+|replying to .+|odpověď na .+|odpověděli jste .+|respondiste a .+|.+ respondió a .+|.+ yanıt verdin|.+ yanıt verdi)$/iu.test(safeText(value));
+  }
+
+  function textWithImageAlt(node) {
+    if (!node.querySelector('img[alt]')) return safeText(node.textContent);
+    const copy = node.cloneNode(true);
+    copy.querySelectorAll('img[alt]').forEach(img => {
+      img.replaceWith(document.createTextNode(img.getAttribute('alt') || ''));
+    });
+    return safeText(copy.textContent);
+  }
+
+  function extractReplyContext(bubble) {
+    const group = bubble.closest('[role="group"]');
+    const scope = group || bubble;
+    const nodes = [scope, ...scope.querySelectorAll('*')];
+    let preview = nodes.find(node => node !== bubble && (
+      node.matches('blockquote, [role="blockquote"]') ||
+      isReplyPreviewLabel(node.getAttribute('aria-label') || '')
+    ));
+    let contextNode = null;
+
+    // Only use a reply header outside the message body. Ordinary message text
+    // saying "you replied to ..." is not evidence of a reply.
+    if (group) {
+      contextNode = nodes.find(node => {
+        if (node === group || node.contains(bubble) || bubble.contains(node)) return false;
+        if (node.matches('button, [role="button"]')) return false;
+        if (node.querySelector('div[dir="auto"], span[dir="auto"]')) return false;
+        return isReplyContextLabel(node.textContent);
+      }) || null;
+      if (!preview && contextNode) {
+        let header = contextNode;
+        // Instagram may wrap the header and quote in separate containers.
+        for (let depth = 0; depth < 3 && header && header !== group; depth++) {
+          const next = header.nextElementSibling;
+          if (next && !next.contains(bubble) && !bubble.contains(next) &&
+              (next.matches('[role="button"], button, [role="presentation"], blockquote') ||
+               next.querySelector('[role="button"], button, blockquote'))) {
+            preview = next;
+            break;
+          }
+          header = header.parentElement;
+        }
+      }
+    }
+
+    // A group must identify one response, not several neighbouring messages.
+    // Quoted bubbles can themselves have the presentation/article role.
+    const bodies = Array.from(scope.querySelectorAll(bubbleSel)).filter(node =>
+      !(preview && preview.contains(node)) && !node.parentElement.closest(bubbleSel)
+    );
+    if (scope !== bubble && (bodies.length !== 1 || bodies[0] !== bubble)) return null;
+    if (!preview && !contextNode) return null;
+    if (preview && preview.contains(bubble)) return null;
+
+    const context = contextNode ? safeText(contextNode.textContent) : '';
+    let text = preview ? textWithImageAlt(preview) : '';
+    if (!text && preview) {
+      const label = safeText(preview.getAttribute('aria-label') || '');
+      // Keep a quote explicitly supplied in the accessibility label.
+      if (isReplyPreviewLabel(label) && label.includes(':')) text = safeText(label.slice(label.indexOf(':') + 1));
+    }
+    return {
+      preview,
+      excluded: [preview, contextNode].filter(Boolean),
+      replyTo: { text, context, source: 'dom-preview', available: !!text }
+    };
+  }
+
+  function isExcludedReplyNode(node, excluded) {
+    return excluded.some(root => root === node || root.contains(node));
+  }
+
+  function scopeWithoutReply(scope, excluded) {
+    if (!excluded.some(node => scope.contains(node))) return scope;
+    const copy = scope.cloneNode(true);
+    const originals = Array.from(scope.querySelectorAll('*'));
+    const copies = Array.from(copy.querySelectorAll('*'));
+    originals.forEach((node, index) => {
+      if (excluded.includes(node)) copies[index].remove();
+    });
+    return copy;
+  }
+
+  function extractBubbleText(bubble, excluded = []) {
     const texts = [];
     const skipValues = new Set([
       'Begen',
@@ -1117,9 +1214,10 @@
     ]);
 
     bubble.querySelectorAll('div[dir="auto"], span[dir="auto"]').forEach(node => {
+      if (isExcludedReplyNode(node, excluded)) return;
       if (node.querySelector('div[dir="auto"], span[dir="auto"]')) return;
       if (node.closest('time')) return;
-      const text = safeText(node.textContent);
+      const text = textWithImageAlt(node);
       if (!text) return;
       if (skipValues.has(text)) return;
       if (isDateText(text)) return;
@@ -1137,10 +1235,11 @@
     });
   }
 
-  function extractBubbleImages(bubble) {
+  function extractBubbleImages(bubble, excluded = []) {
     if (hasReelTrigger(bubble)) return [];
     const out = [];
     bubble.querySelectorAll('img').forEach(img => {
+      if (isExcludedReplyNode(img, excluded)) return;
       const src = absoluteUrl(img.currentSrc || img.src || '');
       if (!src) return;
       if (/profile|avatar/i.test(src)) return;
@@ -1157,9 +1256,9 @@
     return uniqBy(out, item => item.url);
   }
 
-  function extractBubbleLinks(bubble) {
+  function extractBubbleLinks(bubble, excluded = []) {
     const out = [];
-    const scope = bubble.closest('[role="group"]') || bubble;
+    const scope = scopeWithoutReply(bubble.closest('[role="group"]') || bubble, excluded);
 
     function pushLink(url, text, sourceHint) {
       if (!url) return;
@@ -1202,9 +1301,9 @@
     return uniqBy(out, item => item.kind + '|' + item.url);
   }
 
-  function extractBubbleAudio(bubble) {
+  function extractBubbleAudio(bubble, excluded = []) {
     const out = [];
-    const scope = bubble.closest('[role="group"]') || bubble;
+    const scope = scopeWithoutReply(bubble.closest('[role="group"]') || bubble, excluded);
 
     scope.querySelectorAll('audio, video, source').forEach(node => {
       const src = absoluteUrl(node.currentSrc || node.src || node.getAttribute('src') || '');
@@ -1290,6 +1389,7 @@
       item.isSent ? '1' : '0',
       item.timestampLabel || '',
       item.text || '',
+      JSON.stringify(item.replyTo || null),
       links,
       images,
       audio,
@@ -1305,6 +1405,7 @@
       item.isSent ? '1' : '0',
       item.timestampLabel || '',
       String(item.text || item.previewText || '').slice(0, 120),
+      JSON.stringify(item.replyTo || null),
       (item.images || []).length,
       (item.audio || []).length,
       (item.links || []).filter(link => link.kind === 'reel' || link.kind === 'post').length,
@@ -1315,8 +1416,12 @@
   function scrapeScreen(container) {
     const items = [];
     const containerRect = container.getBoundingClientRect();
+    const bubbles = Array.from(container.querySelectorAll(bubbleSel));
+    const replies = new Map(bubbles.map(bubble => [bubble, extractReplyContext(bubble)]));
+    const replyNodes = Array.from(replies.values()).filter(Boolean).flatMap(reply => reply.excluded);
 
     container.querySelectorAll('span, div, time').forEach(node => {
+      if (isExcludedReplyNode(node, replyNodes)) return;
       if (!isDateMarkerNode(node, containerRect)) return;
       const text = getDateMarkerLabel(node);
       if (!text || text.length <= 3 || text.length >= 60) return;
@@ -1329,6 +1434,7 @@
     // V1-style CSS color fallback: detect gray-colored date spans
     if (items.filter(i => i.type === 'date').length === 0) {
       container.querySelectorAll('span').forEach(s => {
+        if (isExcludedReplyNode(s, replyNodes)) return;
         if (s.closest('#' + APP_ID)) return;
         const rect = s.getBoundingClientRect();
         if (!rect.height || rect.top > window.innerHeight || rect.bottom < 0) return;
@@ -1348,6 +1454,7 @@
     // Second fallback: check all spans/divs without color restriction
     if (items.filter(i => i.type === 'date').length === 0) {
       container.querySelectorAll('span, div').forEach(s => {
+        if (isExcludedReplyNode(s, replyNodes)) return;
         if (s.closest('#' + APP_ID)) return;
         if (s.closest(bubbleSel)) return;
         const rect = s.getBoundingClientRect();
@@ -1362,6 +1469,7 @@
     }
 
     container.querySelectorAll('a[href]').forEach(anchor => {
+      if (isExcludedReplyNode(anchor, replyNodes)) return;
       const rect = anchor.getBoundingClientRect();
       if (!rect.height || rect.top > window.innerHeight || rect.bottom < 0) return;
       if (anchor.closest(bubbleSel)) return;
@@ -1382,6 +1490,7 @@
     });
 
     container.querySelectorAll('img').forEach(img => {
+      if (isExcludedReplyNode(img, replyNodes)) return;
       const rect = img.getBoundingClientRect();
       if (!rect.height || rect.top > window.innerHeight || rect.bottom < 0) return;
       if (img.closest(bubbleSel)) return;
@@ -1401,16 +1510,19 @@
       registerResource(src, 'standalone-image', { hint: 'image' });
     });
 
-    container.querySelectorAll(bubbleSel).forEach(bubble => {
+    bubbles.forEach(bubble => {
+      if (isExcludedReplyNode(bubble, replyNodes)) return;
       const rect = bubble.getBoundingClientRect();
       if (!rect.height || rect.top > window.innerHeight || rect.bottom < 0) return;
 
-      const texts = extractBubbleText(bubble);
-      const images = extractBubbleImages(bubble);
-      const links = extractBubbleLinks(bubble);
-      const audio = extractBubbleAudio(bubble);
+      const reply = replies.get(bubble);
+      const excluded = reply ? reply.excluded : [];
+      const texts = extractBubbleText(bubble, excluded);
+      const images = extractBubbleImages(bubble, excluded);
+      const links = extractBubbleLinks(bubble, excluded);
+      const audio = extractBubbleAudio(bubble, excluded);
       const isSent = detectIsSent(bubble, containerRect);
-      const timestampLabel = extractTimestampNearBubble(bubble);
+      const timestampLabel = extractTimestampNearBubble(bubble, excluded);
 
       applyPendingReelAssignments(items, bubble, isSent, timestampLabel);
 
@@ -1420,6 +1532,7 @@
         type: 'message',
         text: texts.join(' ') || '',
         previewText: texts.join(' ') || t('attachmentOnly'),
+        replyTo: reply ? reply.replyTo : null,
         isSent,
         liked: extractLikeEmoji(bubble),
         timestampLabel,
@@ -1606,6 +1719,7 @@
     const searchTarget = safeText([
       item.text,
       item.previewText,
+      item.replyTo ? item.replyTo.text + ' ' + item.replyTo.context : '',
       item.type === 'message' ? getDirectionLabel(item.isSent) : '',
       item.url,
       (item.links || []).map(link => link.url).join(' '),
@@ -2292,6 +2406,11 @@
     };
   }
 
+  function formatReplyText(reply) {
+    const text = reply.text || t('originalUnavailable');
+    return reply.context ? reply.context + ' — ' + text : text;
+  }
+
   function buildTextExport(items, options) {
     const exportItems = items || state.timeline;
     const includeLinks = !options || options.includeLinks !== false;
@@ -2325,6 +2444,7 @@
       }
 
       const senderLabel = getDirectionLabel(item.isSent);
+      if (item.replyTo) lines.push('  > ' + t('replyToLabel') + ': ' + formatReplyText(item.replyTo));
       let line = senderLabel + ': ' + (item.text || t('attachmentOnly'));
       if (item.timestampLabel) line += ' [' + item.timestampLabel + ']';
       if (item.liked) line += ' [' + t('likeBadge') + ': ' + item.liked + ']';
@@ -2389,6 +2509,10 @@
 
       const direction = getDirectionLabel(item.isSent);
       lines.push('- **' + direction + '** ' + (item.text || t('attachmentOnly')));
+      if (item.replyTo) {
+        const quote = formatReplyText(item.replyTo).replace(/[\\`*_{}\[\]<>#|]/g, '\\$&');
+        lines.push('  > ' + t('replyToLabel') + ': ' + quote);
+      }
       if (item.timestampLabel) lines.push('  - ' + t('exportTimeLabel') + ': ' + item.timestampLabel);
       if (item.liked) lines.push('  - ' + t('likeBadge') + ': ' + item.liked);
       (item.images || []).forEach(image => lines.push('  - ' + t('exportImageLabel') + ': ' + image.url));
@@ -2573,6 +2697,7 @@
         '<span>' + escapeHtml(item.dateText || '') + (item.timestampLabel ? ' - ' + escapeHtml(item.timestampLabel) : '') + '</span>' +
         '</div>' +
         (chips.length ? '<div class="idm-chip-row">' + chips.join('') + '</div>' : '') +
+        (item.replyTo ? '<blockquote class="idm-reply-quote"><strong>' + escapeHtml(t('replyToLabel')) + '</strong><div>' + escapeHtml(formatReplyText(item.replyTo)) + '</div></blockquote>' : '') +
         '<div class="idm-message-text">' + escapeHtml(item.text || item.previewText || t('attachmentOnly')) + '</div>' +
         imagePreview +
         (linkRows.length ? '<div class="idm-links-block">' + linkRows.join('') + '</div>' : '') +
@@ -3413,6 +3538,16 @@
         line-height: 1.6;
         white-space: pre-wrap;
         word-break: break-word;
+      }
+      #${APP_ID} .idm-reply-quote {
+        margin: 0 0 10px;
+        padding: 8px 12px;
+        border-left: 3px solid #a78bfa;
+        background: rgba(167, 139, 250, 0.08);
+        color: #bac3d1;
+        font-size: 12px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
       #${APP_ID} .idm-thumb-link {
         display: inline-block;

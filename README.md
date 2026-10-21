@@ -42,6 +42,7 @@
 - **Voice messages as text** - a dedicated mode collects Instagram's own transcripts for voice notes so the export is searchable.
 - **Filter and search before exporting** - find messages by keyword, or narrow the timeline to images, audio or reels only.
 - **Export a selection, not just everything** - tick the messages you actually want.
+- **Reply context** - recognized quoted-message previews appear above replies and are included in JSON, TXT, Markdown and ZIP exports. JSON stores them in `replyTo`; search also includes the quoted text. Only the preview exposed by the page is captured: truncated previews stay truncated, and an identified reply without a preview is marked unavailable. The script does not open older messages to reconstruct missing content.
 - **Output in your language** - the export headers follow your language choice, so a Turkish export reads `Gönderilen:` rather than `Sent:`.
 - **Survives virtual scrolling** - Instagram unloads messages as you scroll; the scan is built around that instead of fighting it.
 
